@@ -1,0 +1,16 @@
+{
+  "roots": [
+    "C:\\"
+  ],
+  "track_depth": 5,
+  "big_file_mb": 100.0,
+  "db_path": "data/diskscope.db",
+  "keep_snapshots": 400,
+  "report_dir": "reports",
+  "exclude": [],
+  "growth_alert_gb": 5.0,
+  "dedupe_hardlinks": true,
+  "base_hours": 24.0,
+  "max_detail_rows": 1500,
+  "detail_min_mb": 1.0
+}

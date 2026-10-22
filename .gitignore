@@ -1,0 +1,19 @@
+# ---- 本机扫描数据：含真实目录结构与容量，禁止提交 ----
+data/
+reports/
+*.db
+*.db-wal
+*.db-shm
+
+# ---- 工作区会话数据 ----
+.workbuddy/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+
+# ---- 系统/编辑器 ----
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
