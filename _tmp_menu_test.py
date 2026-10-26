@@ -117,6 +117,13 @@ def main() -> int:
     assert cli.cmd_top(ns, cfg) in (0, None)
     print("[5] 菜单全部命令可执行   OK")
 
+    # ---- 6. 任意两个快照对比（diff / report 显式指定基线与目标）----
+    ns2 = argparse.Namespace(root=None, id=id2, base_id=id1, hours=24.0,
+                             top=5, min_bytes=1, open=False)
+    assert cli.cmd_diff(ns2, cfg) == 0
+    assert cli.cmd_report(ns2, cfg) == 0
+    print(f"[6] 任意两快照对比 #{id1} → #{id2}（diff + report --base-id）   OK")
+
     store.close()
     print("\nSMOKE TEST OK  （临时数据在 %s，可自行删除）" % TMP)
     return 0

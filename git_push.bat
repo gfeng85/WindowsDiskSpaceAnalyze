@@ -29,7 +29,10 @@ if not errorlevel 1 (
 git status --short
 
 echo [4/4] commit and push
-git commit -m "DiskScope v1.0: Windows disk space monitoring and growth attribution tool" || (
+set MSG=DiskScope v1.0: Windows disk space monitoring and growth attribution tool
+if exist .git\refs\heads\main for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm"') do set TS=%%i
+if defined TS set MSG=DiskScope: update %TS% - any-two-snapshot comparison
+git commit -m "%MSG%" || (
     echo (nothing to commit or commit failed - see output above^)
 )
 git remote get-url origin >nul 2>nul

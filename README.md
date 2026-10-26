@@ -32,6 +32,10 @@
 4. **目录扫描覆盖不到的地方** —— 卷影副本、回收站等拿不到准确值的项目，
    附直接可粘贴的排查/清理命令。这也是"目录加起来对不上已用空间"的常见原因。
 
+> 默认对比"最新快照 vs 24 小时前"。想看任意两天的变化：菜单选 2 或 3 时会先列出
+> 快照，输入 `基线ID 目标ID`（如 `3 9`）即可；命令行用 `--base-id 3 --id 9`。
+> 两个快照根目录不同时会拒绝对比，防止出无意义的结果。
+
 ---
 
 ## 三、设计要点（为什么这么做）
@@ -84,7 +88,8 @@ python run.py scan --root D:\ --depth 6        换根目录/深度
 python run.py scan --fast                      跳过硬链接去重，快 3~6 倍
 python run.py scan --report --open             扫完立即出报告
 python run.py diff --hours 72 --top 30         对比 72 小时前的快照
-python run.py diff --base-id 3 --id 9          指定任意两个快照对比
+python run.py diff --base-id 3 --id 9          任意两个快照对比（基线 3 → 目标 9）
+python run.py report --base-id 3 --id 9        用任意两个快照生成报告
 python run.py report --open                    用最新快照出报告
 python run.py top --path D:\data --depth 4     实时分析某目录容量分布（不写库）
 python run.py list                             快照列表

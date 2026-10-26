@@ -188,6 +188,8 @@ def _resolve_target(store, args, cfg):
         tgt = snaps[-1]
     if args.base_id:
         base = store.snapshot(args.base_id)
+        if base is None:
+            print(f"基线快照 #{args.base_id} 不存在（用 list 查看有效快照）")
     else:
         base = analyze.choose_baseline(snaps, tgt, args.hours)
     return tgt, base, root, snaps
@@ -202,10 +204,17 @@ def cmd_diff(args, cfg) -> int:
         return 1
 
     diff = analyze.compare(store, base["id"] if base else None, tgt["id"])
+    if base and base["root"] != tgt["root"]:
+        print(_c("  [!] 基线与目标快照根目录不同，对比结果没有意义。", "yellow"))
+        store.close()
+        return 1
     total_d = tgt["total_size"] - (base["total_size"] if base else 0)
 
     _print_header(f"空间变化  {root}")
     print(f"  当前快照  #{tgt['id']}  {tgt['created_at']}  总量 {fmt_size(tgt['total_size'])}")
+    if args.base_id and base is None:
+        store.close()
+        return 1
     if base:
         print(f"  基线快照  #{base['id']}  {base['created_at']}  总量 {fmt_size(base['total_size'])}")
         print("  期间变化  " + _signed_pad(total_d, 12))
@@ -250,7 +259,7 @@ def cmd_diff(args, cfg) -> int:
 # ---------------------------------------------------------------- report
 
 def _do_report(cfg, base_hours: float, open_it: bool, target_id=None,
-               root: str | None = None) -> int:
+               root: str | None = None, base_id: int | None = None) -> int:
     store = Store(cfg.db_file())
     root = scanner.normalize_root(root or cfg.root())
     snaps = store.snapshots(root)
@@ -261,7 +270,20 @@ def _do_report(cfg, base_hours: float, open_it: bool, target_id=None,
     tgt = store.snapshot(target_id) if target_id else snaps[-1]
     if tgt is None:
         tgt = snaps[-1]
-    base = analyze.choose_baseline(snaps, tgt, base_hours)
+    if base_id:
+        base = store.snapshot(base_id)
+        if base is None:
+            print(_c(f"  快照 #{base_id} 不存在（用 list 查看有效快照）。", "red"))
+            store.close()
+            return 1
+    else:
+        base = None
+    if base is None:
+        base = analyze.choose_baseline(snaps, tgt, base_hours)
+    if base and base["root"] != tgt["root"]:
+        print(_c(f"  [!] 基线 #{base['id']} 与目标 #{tgt['id']} 根目录不同，无法对比。", "yellow"))
+        store.close()
+        return 1
 
     diff = analyze.compare(store, base["id"] if base else None, tgt["id"])
     base_nodes = store.nodes(base["id"]) if base else {}
@@ -279,7 +301,67 @@ def _do_report(cfg, base_hours: float, open_it: bool, target_id=None,
 
 def cmd_report(args, cfg) -> int:
     _print_header("生成 HTML 报告")
-    return _do_report(cfg, args.hours, args.open, args.id, args.root)
+    return _do_report(cfg, args.hours, args.open, args.id, args.root,
+                      getattr(args, "base_id", None))
+
+
+# ---------------------------------------------------------------- 快照选择（菜单用）
+
+def _pick_pair(cfg) -> tuple[int | None, int | None]:
+    """交互式选择两个快照做对比。
+
+    返回 (base_id, target_id)；target_id 为 None 表示放弃选择，走默认逻辑。
+    输入格式：「基线ID 目标ID」或「目标ID」，直接回车走默认。
+    """
+    store = Store(cfg.db_file())
+    try:
+        root = scanner.normalize_root(cfg.root())
+        snaps = store.snapshots(root)
+        if not snaps:
+            print("  还没有任何快照。")
+            return None, None
+        print()
+        print("  " + _c(pad("ID", 7) + pad("时间", 21)
+                       + pad("目录总量", 12, "right") + "  根目录", "gray"))
+        show = snaps[-12:]
+        for s in show:
+            print("  " + pad(f"#{s['id']}", 7) + pad(s["created_at"], 21)
+                  + pad(fmt_size(s["total_size"]), 12, "right") + "  " + s["root"])
+        if len(snaps) > len(show):
+            print("  " + _c(f"  （仅显示最近 {len(show)} 个，共 {len(snaps)} 个；"
+                            "可输入更大的 ID）", "gray"))
+        raw = input("\n  对比哪两个？[基线ID 目标ID]（如 3 9；只输目标则基线自动；"
+                    "回车=最新 vs 24h 前）> ").strip()
+        if not raw:
+            return None, None
+        parts = raw.replace(",", " ").replace("#", " ").split()
+        try:
+            ids = [int(x) for x in parts]
+        except ValueError:
+            print(_c("  输入无效，使用默认对比。", "yellow"))
+            return None, None
+        if len(ids) == 1:
+            tgt_id = ids[0]
+            base_id = None
+        else:
+            base_id, tgt_id = ids[-2], ids[-1]
+        valid = {s["id"]: s for s in snaps}
+        if tgt_id not in valid:
+            print(_c(f"  快照 #{tgt_id} 不存在，使用默认对比。", "yellow"))
+            return None, None
+        if base_id is not None:
+            if base_id not in valid:
+                print(_c(f"  基线 #{base_id} 不存在，使用自动基线。", "yellow"))
+                base_id = None
+            elif base_id >= tgt_id:
+                print(_c("  基线必须早于目标（ID 更小），已自动交换。", "yellow"))
+                base_id, tgt_id = min(base_id, tgt_id), max(base_id, tgt_id)
+            elif valid[base_id]["root"] != valid[tgt_id]["root"]:
+                print(_c("  两个快照根目录不同，无法对比，使用默认。", "yellow"))
+                return None, None
+        return base_id, tgt_id
+    finally:
+        store.close()
 
 
 # ---------------------------------------------------------------- top
@@ -535,8 +617,8 @@ MENU = """
   │  DiskScope · C 盘空间监控与增长归因                        │
   ├────────────────────────────────────────────────────────────┤
   │  1  立即扫描并生成快照                                     │
-  │  2  生成变化报告（浏览器打开）                             │
-  │  3  控制台查看增长 TOP（最近一次 vs 24 小时前）            │
+  │  2  生成变化报告（可选任意两个快照对比）                  │
+  │  3  控制台查看增长归因（可选任意两个快照对比）            │
   │  4  查看快照列表                                           │
   │  5  实时分析指定目录（不写库，类似 WizTree）               │
   │  6  安装定时扫描任务（每 6 小时，SYSTEM 权限）             │
@@ -569,8 +651,14 @@ def cmd_menu(args, cfg) -> int:
                 cmd_scan(ns, cfg)
             elif choice == "2":
                 ns.open = True
+                b, t = _pick_pair(cfg)
+                if t is not None:
+                    ns.id, ns.base_id = t, b
                 cmd_report(ns, cfg)
             elif choice == "3":
+                b, t = _pick_pair(cfg)
+                if t is not None:
+                    ns.id, ns.base_id = t, b
                 cmd_diff(ns, cfg)
             elif choice == "4":
                 cmd_list(ns, cfg)
@@ -602,6 +690,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""示例:
   python -m diskscope scan --report --open        扫描 C 盘并生成报告
   python -m diskscope diff --hours 72 --top 30    对比 72 小时前的快照
+  python -m diskscope diff --base-id 3 --id 9     任意两个快照对比
+  python -m diskscope report --base-id 3 --id 9   用任意两快照出报告
   python -m diskscope top --path D:\\\\data --depth 4   实时分析某个目录
   python -m diskscope install-task --every-hours 6
 """)
@@ -627,7 +717,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("diff", help="控制台输出增长归因")
     s.add_argument("--root")
     s.add_argument("--id", type=int, help="目标快照，默认最新")
-    s.add_argument("--base-id", type=int, help="指定基线快照")
+    s.add_argument("--base-id", type=int,
+                   help="基线快照 ID（任意早于目标的快照）；指定后忽略 --hours")
     s.add_argument("--hours", type=float, default=24.0, help="基线回溯小时数，默认 24")
     s.add_argument("--top", type=int, default=25, help="显示条数，默认 25")
     s.add_argument("--min-bytes", type=int, default=1024 ** 2, help="最小变化字节数")
@@ -635,7 +726,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("report", help="生成 HTML 报告")
     s.add_argument("--root")
-    s.add_argument("--id", type=int)
+    s.add_argument("--id", type=int, help="目标快照，默认最新")
+    s.add_argument("--base-id", type=int,
+                   help="基线快照 ID（任意早于目标的快照）；指定后忽略 --hours")
     s.add_argument("--hours", type=float, default=24.0)
     s.add_argument("--open", action="store_true")
     s.set_defaults(func=cmd_report)
