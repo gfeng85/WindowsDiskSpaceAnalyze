@@ -308,11 +308,12 @@ def cmd_report(args, cfg) -> int:
 # ---------------------------------------------------------------- 快照选择（菜单用）
 
 def _pick_pair(cfg) -> tuple[int | None, int | None]:
-    """交互式选择两个快照做对比。
+    """交互式选择两个快照做对比（支持翻页浏览全部快照）。
 
     返回 (base_id, target_id)；target_id 为 None 表示放弃选择，走默认逻辑。
-    输入格式：「基线ID 目标ID」或「目标ID」，直接回车走默认。
+    输入格式：「基线ID 目标ID」或「目标ID」；n/p/f/l 翻页；直接回车走默认。
     """
+    PAGE = 15
     store = Store(cfg.db_file())
     try:
         root = scanner.normalize_root(cfg.root())
@@ -320,46 +321,74 @@ def _pick_pair(cfg) -> tuple[int | None, int | None]:
         if not snaps:
             print("  还没有任何快照。")
             return None, None
-        print()
-        print("  " + _c(pad("ID", 7) + pad("时间", 21)
-                       + pad("目录总量", 12, "right") + "  根目录", "gray"))
-        show = snaps[-12:]
-        for s in show:
-            print("  " + pad(f"#{s['id']}", 7) + pad(s["created_at"], 21)
-                  + pad(fmt_size(s["total_size"]), 12, "right") + "  " + s["root"])
-        if len(snaps) > len(show):
-            print("  " + _c(f"  （仅显示最近 {len(show)} 个，共 {len(snaps)} 个；"
-                            "可输入更大的 ID）", "gray"))
-        raw = input("\n  对比哪两个？[基线ID 目标ID]（如 3 9；只输目标则基线自动；"
-                    "回车=最新 vs 24h 前）> ").strip()
-        if not raw:
-            return None, None
-        parts = raw.replace(",", " ").replace("#", " ").split()
-        try:
-            ids = [int(x) for x in parts]
-        except ValueError:
-            print(_c("  输入无效，使用默认对比。", "yellow"))
-            return None, None
-        if len(ids) == 1:
-            tgt_id = ids[0]
-            base_id = None
-        else:
-            base_id, tgt_id = ids[-2], ids[-1]
-        valid = {s["id"]: s for s in snaps}
-        if tgt_id not in valid:
-            print(_c(f"  快照 #{tgt_id} 不存在，使用默认对比。", "yellow"))
-            return None, None
-        if base_id is not None:
-            if base_id not in valid:
-                print(_c(f"  基线 #{base_id} 不存在，使用自动基线。", "yellow"))
-                base_id = None
-            elif base_id >= tgt_id:
-                print(_c("  基线必须早于目标（ID 更小），已自动交换。", "yellow"))
-                base_id, tgt_id = min(base_id, tgt_id), max(base_id, tgt_id)
-            elif valid[base_id]["root"] != valid[tgt_id]["root"]:
-                print(_c("  两个快照根目录不同，无法对比，使用默认。", "yellow"))
+
+        total = len(snaps)
+        pages = max(1, (total + PAGE - 1) // PAGE)
+        page = pages - 1          # 默认停在最后一页（最近的快照）
+
+        while True:
+            begin = page * PAGE
+            chunk = snaps[begin:begin + PAGE]
+            print()
+            print(f"  " + _c(f"快照列表  第 {page + 1}/{pages} 页 · 共 {total} 个"
+                             f" · 本页 #{chunk[0]['id']}~#{chunk[-1]['id']}", "gray"))
+            print("  " + _c(pad("ID", 7) + pad("时间", 21)
+                            + pad("目录总量", 12, "right") + "  根目录", "gray"))
+            for s in chunk:
+                print("  " + pad(f"#{s['id']}", 7) + pad(s["created_at"], 21)
+                      + pad(fmt_size(s["total_size"]), 12, "right") + "  " + s["root"])
+
+            hint = "  " + _c("[n]下一页  [p]上一页  [f]最早  [l]最新  回车=默认对比", "gray")
+            print(hint)
+            raw = input("  对比哪两个？[基线ID 目标ID]（如 3 9）> ").strip()
+            if not raw:
                 return None, None
-        return base_id, tgt_id
+            cmd = raw.lower()
+            if cmd in ("n", "next", "x", "+"):
+                if page < pages - 1:
+                    page += 1
+                else:
+                    print(_c("  已经是最后一页。", "yellow"))
+                continue
+            if cmd in ("p", "prev", "-"):
+                if page > 0:
+                    page -= 1
+                else:
+                    print(_c("  已经是第一页。", "yellow"))
+                continue
+            if cmd in ("f", "first"):
+                page = 0
+                continue
+            if cmd in ("l", "last"):
+                page = pages - 1
+                continue
+
+            parts = raw.replace(",", " ").replace("#", " ").split()
+            try:
+                ids = [int(x) for x in parts]
+            except ValueError:
+                print(_c("  输入无效（n/p/f/l 翻页，或输入快照 ID），请重试。", "yellow"))
+                continue
+            if len(ids) == 1:
+                tgt_id = ids[0]
+                base_id = None
+            else:
+                base_id, tgt_id = ids[-2], ids[-1]
+            valid = {s["id"]: s for s in snaps}
+            if tgt_id not in valid:
+                print(_c(f"  快照 #{tgt_id} 不存在，请重试。", "yellow"))
+                continue
+            if base_id is not None:
+                if base_id not in valid:
+                    print(_c(f"  基线 #{base_id} 不存在，请重试。", "yellow"))
+                    continue
+                if base_id >= tgt_id:
+                    print(_c("  基线必须早于目标（ID 更小），已自动交换。", "yellow"))
+                    base_id, tgt_id = min(base_id, tgt_id), max(base_id, tgt_id)
+                if valid[base_id]["root"] != valid[tgt_id]["root"]:
+                    print(_c("  两个快照根目录不同，无法对比，请重选。", "yellow"))
+                    continue
+            return base_id, tgt_id
     finally:
         store.close()
 

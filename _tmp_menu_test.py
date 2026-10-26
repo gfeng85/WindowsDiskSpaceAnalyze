@@ -122,7 +122,10 @@ def main() -> int:
                              top=5, min_bytes=1, open=False)
     assert cli.cmd_diff(ns2, cfg) == 0
     assert cli.cmd_report(ns2, cfg) == 0
-    print(f"[6] 任意两快照对比 #{id1} → #{id2}（diff + report --base-id）   OK")
+    latest = (cfg.report_path() / "latest.html").read_text(encoding="utf-8")
+    for token in ("对比区间", f"基线 #{id1}", f"目标 #{id2}"):
+        assert token in latest, f"趋势图缺少高亮标识：{token}"
+    print(f"[6] 任意两快照对比 #{id1} → #{id2}（diff + report --base-id + 趋势图高亮）   OK")
 
     store.close()
     print("\nSMOKE TEST OK  （临时数据在 %s，可自行删除）" % TMP)

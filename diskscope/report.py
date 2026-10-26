@@ -118,17 +118,42 @@ def _status_pill(status: str) -> str:
     return f'<span class="pill {cls}">{STATUS_CN.get(status, status)}</span>'
 
 
-def _trend_svg(snaps: list[dict]) -> str:
+def _trend_svg(snaps: list[dict], base_id: int | None = None,
+               target_id: int | None = None) -> str:
     if len(snaps) < 2:
         return '<div class="empty">至少需要 2 次快照才能绘制趋势线（当前 1 次）。安装定时任务后会逐日累积。</div>'
-    pts = [(s["created_at"][5:16], s["total_size"]) for s in snaps][-40:]
+
+    n_all = len(snaps)
+    pos = {s["id"]: i for i, s in enumerate(snaps)}
+    bi = pos.get(base_id) if base_id is not None else None
+    ti = pos.get(target_id) if target_id is not None else None
+
+    # 窗口：默认最近 40 个；若对比基线更早，向前扩展以包含它
+    start = max(0, n_all - 40)
+    if bi is not None:
+        start = min(start, bi)
+    sel = list(range(start, n_all))
+    sampled = False
+    if len(sel) > 80:
+        # 等距下采样，但强制保留对比的两端与被选快照
+        keep = {sel[0], sel[-1]}
+        if bi is not None:
+            keep.add(bi)
+        if ti is not None:
+            keep.add(ti)
+        step = (len(sel) - 1) / 78
+        sel = sorted(keep | {sel[min(len(sel) - 1, round(k * step))] for k in range(79)})
+        sampled = True
+    at = {g: k for k, g in enumerate(sel)}
+
+    pts = [(snaps[g]["created_at"][5:16], snaps[g]["total_size"]) for g in sel]
     n = len(pts)
     vals = [p[1] for p in pts]
     lo, hi = min(vals), max(vals)
     if hi == lo:
         hi = lo + 1
-    W, H = 1120, 190
-    l, r, t, b = 62, 14, 16, 30
+    W, H = 1120, 210
+    l, r, t, b = 62, 14, 34, 30
     iw, ih = W - l - r, H - t - b
 
     def X(i):
@@ -148,16 +173,57 @@ def _trend_svg(snaps: list[dict]) -> str:
             f'<line x1="{l}" y1="{y:.1f}" x2="{W-r}" y2="{y:.1f}" stroke="#eef1f5" stroke-width="1"/>'
             f'<text x="{l-8}" y="{y+4:.1f}" text-anchor="end" font-size="10.5" fill="#94a3b8">{_e(fmt_size(v))}</text>'
         )
+
+    # 对比区间色带（画在折线下方）
+    band = ""
+    band_label = ""
+    if bi is not None and ti is not None and bi != ti and bi in at and ti in at:
+        x1, x2 = X(at[bi]), X(at[ti])
+        left_id, right_id = ((snaps[bi]["id"], snaps[ti]["id"]) if x1 <= x2
+                             else (snaps[ti]["id"], snaps[bi]["id"]))
+        if x1 > x2:
+            x1, x2 = x2, x1
+        band = (f'<rect x="{x1:.1f}" y="{t}" width="{max(2.0, x2 - x1):.1f}" '
+                f'height="{ih}" fill="#f59e0b" opacity="0.10"/>')
+        band_label = (f'<text x="{(x1 + x2) / 2:.1f}" y="{t - 6:.1f}" '
+                      f'text-anchor="middle" font-size="10.5" fill="#b45309">'
+                      f'对比区间 #{_e(left_id)} → #{_e(right_id)}</text>')
+
     dots = "".join(
         f'<circle cx="{X(i):.1f}" cy="{Y(v):.1f}" r="3" fill="#2563eb">'
         f"<title>{_e(pts[i][0])}  {_e(fmt_size(v))}</title></circle>"
         for i, (_, v) in enumerate(pts)
     )
+
+    # 基线 / 目标 标记
+    marks = []
+    seen_marks = set()
+    for gid, color, name in ((bi, "#d97706", "基线"), (ti, "#cf3b3b", "目标")):
+        if gid is None or gid not in at or gid in seen_marks:
+            continue
+        seen_marks.add(gid)
+        k = at[gid]
+        sid = snaps[gid]["id"]
+        x, y = X(k), Y(pts[k][1])
+        anchor = "start" if x < W * 0.10 else ("end" if x > W * 0.90 else "middle")
+        dx = 7 if anchor == "start" else (-7 if anchor == "end" else 0)
+        marks.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5.5" fill="{color}" '
+            f'stroke="#fff" stroke-width="2">'
+            f'<title>{name} #{_e(sid)}  {_e(pts[k][0])}  {_e(fmt_size(pts[k][1]))}</title></circle>'
+            f'<text x="{x+dx:.1f}" y="{y-10:.1f}" text-anchor="{anchor}" font-size="10.5" '
+            f'font-weight="650" fill="{color}">{name} #{_e(sid)}</text>')
+
     labels = ""
     step = max(1, n // 6)
     for i in range(0, n, step):
         labels += (f'<text x="{X(i):.1f}" y="{H-10}" text-anchor="middle" '
                    f'font-size="10.5" fill="#94a3b8">{_e(pts[i][0])}</text>')
+
+    note = ""
+    if sampled:
+        note = ('<div class="hint-note" style="margin-top:4px">'
+                '× 快照数量超出绘图区间，横向已等距取样，基线/目标两端已强制保留。</div>')
 
     return f"""<svg viewBox="0 0 {W} {H}" width="100%" height="{H}" role="img">
 <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
@@ -165,11 +231,12 @@ def _trend_svg(snaps: list[dict]) -> str:
 <stop offset="100%" stop-color="#2563eb" stop-opacity="0"/>
 </linearGradient></defs>
 {''.join(grid)}
+{band}
 <polygon points="{area}" fill="url(#g1)"/>
 <polyline points="{coords}" fill="none" stroke="#2563eb" stroke-width="2"
   stroke-linejoin="round" stroke-linecap="round"/>
-{dots}{labels}
-</svg>"""
+{dots}{marks}{band_label}{labels}
+</svg>{note}"""
 
 
 def _detail_table(rows: list[Row], max_rows: int, min_bytes: int = 1024 * 1024) -> str:
@@ -433,13 +500,22 @@ def build_html(
     if len(snaps) >= 2:
         lo = min((s["total_size"] for s in snaps), default=0)
         hi = max((s["total_size"] for s in snaps), default=0)
-        legend_html = (
-            '<div class="legend"><span><i class="dot" style="background:#2563eb"></i>'
-            '目录总量（已按硬链接去重）</span><span>纵轴：'
-            f'{_e(fmt_size(lo))} ~ {_e(fmt_size(hi))}</span></div>'
-        )
+        parts = ['<span><i class="dot" style="background:#2563eb"></i>'
+                 '目录总量（已按硬链接去重）</span>',
+                 f'<span>纵轴：{_e(fmt_size(lo))} ~ {_e(fmt_size(hi))}</span>']
+        if base:
+            parts.append('<span><i class="dot" style="background:#f59e0b;opacity:.45"></i>'
+                         '本次对比区间</span>')
+            parts.append(f'<span><i class="dot" style="background:#d97706"></i>'
+                         f'基线 #{_e(base.get("id"))}</span>')
+            parts.append(f'<span><i class="dot" style="background:#cf3b3b"></i>'
+                         f'目标 #{_e(tgt.get("id"))}</span>')
+        legend_html = '<div class="legend">' + "".join(parts) + '</div>'
     else:
         legend_html = ""
+
+    trend_tag = (f'对比 #{base.get("id")} → #{tgt.get("id")} · 共 {len(snaps)} 次快照'
+                 if base else f'最近 {min(len(snaps), 40)} 次快照')
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -462,8 +538,8 @@ def build_html(
 {cards}
 
 <div class="card">
-  <h2>容量趋势 <span class="tag">最近 {min(len(snaps), 40)} 次快照</span></h2>
-  {_trend_svg(snaps)}
+  <h2>容量趋势 <span class="tag">{_e(trend_tag)}</span></h2>
+  {_trend_svg(snaps, base.get('id') if base else None, tgt.get('id'))}
   {legend_html}
 </div>
 
